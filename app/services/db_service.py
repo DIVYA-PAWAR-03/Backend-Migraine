@@ -37,7 +37,13 @@ class DatabaseService:
             bool: True if connection successful, False otherwise
         """
         try:
-            self.client = AsyncIOMotorClient(settings.MONGODB_URL)
+            # Keep serverless startup responsive even when DB is unreachable.
+            self.client = AsyncIOMotorClient(
+                settings.MONGODB_URL,
+                serverSelectionTimeoutMS=3000,
+                connectTimeoutMS=3000,
+                socketTimeoutMS=3000,
+            )
             # Test connection
             await self.client.admin.command('ping')
             
