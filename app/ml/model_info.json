@@ -1,0 +1,94 @@
+{
+  "version": "2.0.0",
+  "trained_at": "2026-02-16T11:47:50.078017",
+  "symptom_classifier": {
+    "model_type": "GradientBoostingClassifier",
+    "classes": [
+      "Basilar-type aura",
+      "Familial hemiplegic migraine",
+      "Migraine without aura",
+      "Other",
+      "Sporadic hemiplegic migraine",
+      "Typical aura with migraine",
+      "Typical aura without migraine"
+    ],
+    "features": [
+      "Age",
+      "Duration",
+      "Frequency",
+      "Location",
+      "Character",
+      "Intensity",
+      "Nausea",
+      "Vomit",
+      "Phonophobia",
+      "Photophobia",
+      "Visual",
+      "Sensory",
+      "Dysphasia",
+      "Dysarthria",
+      "Vertigo",
+      "Tinnitus",
+      "Hypoacusis",
+      "Diplopia",
+      "Defect",
+      "Ataxia",
+      "Conscience",
+      "Paresthesia",
+      "DPF"
+    ],
+    "feature_importance": {
+      "Age": 0.05899946682757789,
+      "Duration": 0.009345617096636153,
+      "Frequency": 0.0167840160030301,
+      "Location": 0.04837263472766432,
+      "Character": 0.11637583808931978,
+      "Intensity": 0.08514383960977621,
+      "Nausea": 0.011687471757538629,
+      "Vomit": 0.004942924392418893,
+      "Phonophobia": 0.009257780944687216,
+      "Photophobia": 0.00936037537337943,
+      "Visual": 0.2942211548264029,
+      "Sensory": 0.09361494949730594,
+      "Dysphasia": 0.04004208285003014,
+      "Dysarthria": 1.6018970041152447e-10,
+      "Vertigo": 0.10456890782134433,
+      "Tinnitus": 0.0106607365961997,
+      "Hypoacusis": 0.02419894642423586,
+      "Diplopia": 0.005012595341416718,
+      "Defect": 0.02289994377026362,
+      "Ataxia": 0.0,
+      "Conscience": 0.0040840928110526704,
+      "Paresthesia": 0.005156233663377735,
+      "DPF": 0.025270391416152057
+    }
+  },
+  "risk_predictor": {
+    "model_type": "GradientBoostingClassifier",
+    "features": [
+      "stress_level",
+      "sleep_hours",
+      "heart_rate",
+      "activity_level",
+      "weather_pressure",
+      "aqi"
+    ],
+    "feature_importance": {
+      "stress_level": 0.2652128008836203,
+      "sleep_hours": 0.3079043839379802,
+      "heart_rate": 0.13411347039007657,
+      "activity_level": 0.06414594094876419,
+      "weather_pressure": 0.12921444768146317,
+      "aqi": 0.09940895615809536
+    }
+  },
+  "migraine_types": [
+    "Migraine without aura",
+    "Typical aura with migraine",
+    "Basilar-type aura",
+    "Sporadic hemiplegic migraine",
+    "Familial hemiplegic migraine",
+    "Typical aura without migraine",
+    "Other"
+  ]
+}

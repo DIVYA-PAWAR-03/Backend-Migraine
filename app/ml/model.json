@@ -1,0 +1,18 @@
+{
+  "model_type": "Random Forest",
+  "accuracy": 0.9625,
+  "f1_score": 0.9808917197452229,
+  "precision": 0.9625,
+  "recall": 1.0,
+  "cv_f1_mean": 0.9776253968253968,
+  "features": [
+    "stress_level",
+    "sleep_hours",
+    "heart_rate",
+    "activity_level",
+    "weather_pressure",
+    "aqi"
+  ],
+  "trained_at": "2026-02-02T12:13:27.554487",
+  "sample_count": 400
+}
