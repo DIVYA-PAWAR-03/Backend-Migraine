@@ -3,9 +3,7 @@ Configuration settings for the Migraine Trigger Tracker application.
 Uses pydantic-settings for environment variable management.
 """
 
-import json
 from pydantic_settings import BaseSettings
-from pydantic import field_validator
 from functools import lru_cache
 
 
@@ -30,33 +28,20 @@ class Settings(BaseSettings):
     SCALER_PATH: str = "app/ml/scaler.pkl"
     
     # CORS Settings
-    CORS_ORIGINS: list[str] = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000"
-    ]
+    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
 
-    @field_validator("CORS_ORIGINS", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, value):
-        """Allow CORS_ORIGINS as JSON array, comma-separated string, or single URL."""
-        if isinstance(value, list):
-            return value
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse CORS_ORIGINS from comma-separated values or JSON-like list string."""
+        raw = (self.CORS_ORIGINS or "").strip()
+        if not raw:
+            return []
 
-        if isinstance(value, str):
-            raw = value.strip()
-            if not raw:
-                return []
+        if raw.startswith("[") and raw.endswith("]"):
+            raw = raw[1:-1]
 
-            if raw.startswith("["):
-                try:
-                    parsed = json.loads(raw)
-                    return [str(item).strip() for item in parsed if str(item).strip()]
-                except json.JSONDecodeError:
-                    pass
-
-            return [item.strip() for item in raw.split(",") if item.strip()]
-
-        return value
+        cleaned = raw.replace('"', "").replace("'", "")
+        return [item.strip() for item in cleaned.split(",") if item.strip()]
     
     class Config:
         env_file = ".env"
