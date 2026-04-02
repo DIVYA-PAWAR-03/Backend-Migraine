@@ -32,11 +32,46 @@ from ..models.schemas import (
     ChatRequest,
     ChatResponse
 )
-from ..services.ml_service import ml_service
-from ..services.enhanced_ml_service import enhanced_ml_service
-from ..services.groq_service import groq_service
+
+
+class _UnavailableService:
+    """Fallback service used when optional imports fail at startup."""
+
+    def __init__(self, name: str, error: Exception | None = None):
+        self.name = name
+        self.error = str(error) if error else "Unknown error"
+
+    def is_model_ready(self):
+        return False
+
+    def is_available(self):
+        return False
+
+    def __getattr__(self, _):
+        raise RuntimeError(f"{self.name} is unavailable: {self.error}")
+
+
+try:
+    from ..services.ml_service import ml_service
+except Exception as e:
+    ml_service = _UnavailableService("ml_service", e)
+
+try:
+    from ..services.enhanced_ml_service import enhanced_ml_service
+except Exception as e:
+    enhanced_ml_service = _UnavailableService("enhanced_ml_service", e)
+
+try:
+    from ..services.groq_service import groq_service
+except Exception as e:
+    groq_service = _UnavailableService("groq_service", e)
+
+try:
+    from ..services.report_service import report_service
+except Exception as e:
+    report_service = _UnavailableService("report_service", e)
+
 from ..services.db_service import db_service
-from ..services.report_service import report_service
 
 logger = logging.getLogger(__name__)
 
