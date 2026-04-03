@@ -17,6 +17,8 @@ Endpoints:
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import Response
 from typing import Optional, List
+from pydantic import BaseModel, EmailStr, Field
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import logging
 
 from ..models.schemas import (
@@ -32,50 +34,138 @@ from ..models.schemas import (
     ChatRequest,
     ChatResponse
 )
-
-
-class _UnavailableService:
-    """Fallback service used when optional imports fail at startup."""
-
-    def __init__(self, name: str, error: Exception | None = None):
-        self.name = name
-        self.error = str(error) if error else "Unknown error"
-
-    def is_model_ready(self):
-        return False
-
-    def is_available(self):
-        return False
-
-    def __getattr__(self, _):
-        raise RuntimeError(f"{self.name} is unavailable: {self.error}")
-
-
-try:
-    from ..services.ml_service import ml_service
-except Exception as e:
-    ml_service = _UnavailableService("ml_service", e)
-
-try:
-    from ..services.enhanced_ml_service import enhanced_ml_service
-except Exception as e:
-    enhanced_ml_service = _UnavailableService("enhanced_ml_service", e)
-
-try:
-    from ..services.groq_service import groq_service
-except Exception as e:
-    groq_service = _UnavailableService("groq_service", e)
-
-try:
-    from ..services.report_service import report_service
-except Exception as e:
-    report_service = _UnavailableService("report_service", e)
-
+from ..services.ml_service import ml_service
+from ..services.enhanced_ml_service import enhanced_ml_service
+from ..services.groq_service import groq_service
 from ..services.db_service import db_service
+from ..services.report_service import report_service
+from ..services.auth_service import auth_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["Migraine Tracker"])
+security = HTTPBearer(auto_error=False)
+
+
+class RegisterRequest(BaseModel):
+    full_name: str = Field(..., min_length=2, max_length=100)
+    email: EmailStr
+    password: str = Field(..., min_length=6, max_length=128)
+    age: Optional[int] = Field(default=None, ge=1, le=120)
+    gender: Optional[str] = Field(default=None, max_length=30)
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=6, max_length=128)
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: dict
+
+
+class PatientInfo(BaseModel):
+    full_name: Optional[str] = "Patient"
+    patient_id: Optional[str] = None
+    email: Optional[str] = None
+    age: Optional[int] = None
+    gender: Optional[str] = None
+
+
+class DailyReportRequest(BaseModel):
+    """Request model for daily report generation."""
+    health_data: HealthDataInput
+    prediction: dict
+    ai_suggestions: Optional[List[str]] = None
+    user_name: Optional[str] = "User"
+    patient_info: Optional[PatientInfo] = None
+
+
+class WeeklyReportRequest(BaseModel):
+    """Request model for weekly report generation."""
+    weekly_data: Optional[List[dict]] = None
+    user_name: Optional[str] = "User"
+    patient_info: Optional[PatientInfo] = None
+
+
+def _patient_from_user(user: dict) -> dict:
+    return {
+        "full_name": user.get("full_name"),
+        "patient_id": user.get("patient_id"),
+        "email": user.get("email"),
+        "age": user.get("age"),
+        "gender": user.get("gender"),
+    }
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    if not credentials or not credentials.credentials:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    payload = auth_service.verify_access_token(credentials.credentials)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user = await db_service.get_user_by_id(payload.get("user_id", ""))
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return user
+
+
+@router.post("/register", response_model=AuthResponse)
+async def register_user(request: RegisterRequest):
+    """Register a new user and return an access token."""
+    try:
+        user = await db_service.register_user(
+            full_name=request.full_name,
+            email=request.email,
+            password=request.password,
+            age=request.age,
+            gender=request.gender,
+        )
+        if not user:
+            raise HTTPException(status_code=400, detail="Email already exists or registration unavailable")
+
+        token = auth_service.create_access_token(user)
+        return AuthResponse(
+            access_token=token,
+            user=db_service.serialize_user_profile(user),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Registration error: {e}")
+        raise HTTPException(status_code=500, detail="Registration failed")
+
+
+@router.post("/login", response_model=AuthResponse)
+async def login_user(request: LoginRequest):
+    """Authenticate user and return token."""
+    try:
+        user = await db_service.authenticate_user(request.email, request.password)
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+
+        token = auth_service.create_access_token(user)
+        return AuthResponse(
+            access_token=token,
+            user=db_service.serialize_user_profile(user),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        raise HTTPException(status_code=500, detail="Login failed")
+
+
+@router.get("/me")
+async def get_me(current_user: dict = Depends(get_current_user)):
+    return {"user": db_service.serialize_user_profile(current_user)}
 
 
 @router.get("/health")
@@ -91,7 +181,10 @@ async def health_check():
 
 
 @router.post("/predict", response_model=PredictionResponse)
-async def predict_migraine_risk(data: HealthDataInput):
+async def predict_migraine_risk(
+    data: HealthDataInput,
+    current_user: dict = Depends(get_current_user)
+):
     """
     Predict migraine risk for the next 24-48 hours.
     
@@ -108,6 +201,7 @@ async def predict_migraine_risk(data: HealthDataInput):
         PredictionResponse with risk assessment
     """
     try:
+        data.user_id = str(current_user.get("_id"))
         logger.info(f"Prediction request for user: {data.user_id}")
         
         # Get prediction from enhanced ML service
@@ -126,7 +220,10 @@ async def predict_migraine_risk(data: HealthDataInput):
 
 
 @router.post("/log-data")
-async def log_health_data(data: HealthDataInput):
+async def log_health_data(
+    data: HealthDataInput,
+    current_user: dict = Depends(get_current_user)
+):
     """
     Store user daily health data with prediction.
     
@@ -140,6 +237,7 @@ async def log_health_data(data: HealthDataInput):
         Confirmation with record ID and prediction
     """
     try:
+        data.user_id = str(current_user.get("_id"))
         logger.info(f"Logging health data for user: {data.user_id}")
         
         # Get prediction
@@ -177,9 +275,9 @@ async def log_health_data(data: HealthDataInput):
 
 @router.get("/history", response_model=HistoryResponse)
 async def get_user_history(
-    user_id: str = Query(default="default_user", description="User identifier"),
     days: int = Query(default=30, ge=1, le=365, description="Number of days to fetch"),
-    limit: int = Query(default=100, ge=1, le=500, description="Maximum records to return")
+    limit: int = Query(default=100, ge=1, le=500, description="Maximum records to return"),
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Fetch user's health data history and trends.
@@ -199,6 +297,7 @@ async def get_user_history(
         HistoryResponse with records and analytics
     """
     try:
+        user_id = str(current_user.get("_id"))
         logger.info(f"Fetching history for user: {user_id}, days: {days}")
         
         history = await db_service.get_user_history(
@@ -218,7 +317,10 @@ async def get_user_history(
 
 
 @router.post("/ai-suggestion", response_model=AISuggestionResponse)
-async def get_ai_suggestions(request: AISuggestionRequest):
+async def get_ai_suggestions(
+    request: AISuggestionRequest,
+    current_user: dict = Depends(get_current_user)
+):
     """
     Get AI-powered personalized migraine prevention advice.
     
@@ -234,6 +336,7 @@ async def get_ai_suggestions(request: AISuggestionRequest):
         AISuggestionResponse with actionable suggestions
     """
     try:
+        request.user_id = str(current_user.get("_id"))
         logger.info(f"AI suggestion request for risk level: {request.risk_level.value}")
         
         # Get AI suggestions from Groq service
@@ -273,7 +376,7 @@ async def get_model_info():
 
 @router.get("/statistics")
 async def get_user_statistics(
-    user_id: str = Query(default="default_user", description="User identifier")
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Get aggregated statistics for a user.
@@ -285,6 +388,7 @@ async def get_user_statistics(
         Aggregated statistics including averages and counts
     """
     try:
+        user_id = str(current_user.get("_id"))
         stats = await db_service.get_statistics(user_id)
         return {
             "user_id": user_id,
@@ -302,7 +406,8 @@ async def get_user_statistics(
 @router.post("/update-migraine-status")
 async def update_migraine_status(
     record_id: str = Query(..., description="Record ID to update"),
-    had_migraine: bool = Query(..., description="Whether migraine occurred")
+    had_migraine: bool = Query(..., description="Whether migraine occurred"),
+    current_user: dict = Depends(get_current_user),
 ):
     """
     Update migraine status for a previous record.
@@ -318,7 +423,12 @@ async def update_migraine_status(
         Confirmation of update
     """
     try:
-        success = await db_service.update_migraine_status(record_id, had_migraine)
+        user_id = str(current_user.get("_id"))
+        success = await db_service.update_migraine_status(
+            record_id=record_id,
+            had_migraine=had_migraine,
+            user_id=user_id,
+        )
         
         if success:
             return {
@@ -364,7 +474,10 @@ async def get_prompt_template():
 # ========================
 
 @router.post("/classify-symptoms", response_model=SymptomClassificationResponse)
-async def classify_symptoms(symptoms: SymptomInput):
+async def classify_symptoms(
+    symptoms: SymptomInput,
+    current_user: dict = Depends(get_current_user)
+):
     """
     Classify migraine type based on symptoms.
     
@@ -381,6 +494,7 @@ async def classify_symptoms(symptoms: SymptomInput):
         SymptomClassificationResponse with classification
     """
     try:
+        symptoms.user_id = str(current_user.get("_id"))
         logger.info(f"Symptom classification request for user: {symptoms.user_id}")
         
         result = enhanced_ml_service.classify_symptoms(symptoms)
@@ -400,7 +514,8 @@ async def classify_symptoms(symptoms: SymptomInput):
 @router.post("/comprehensive-analysis", response_model=ComprehensiveAnalysisResponse)
 async def get_comprehensive_analysis(
     health_data: HealthDataInput,
-    symptoms: Optional[SymptomInput] = None
+    symptoms: Optional[SymptomInput] = None,
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Get comprehensive migraine analysis.
@@ -416,6 +531,10 @@ async def get_comprehensive_analysis(
         ComprehensiveAnalysisResponse with full analysis
     """
     try:
+        user_id = str(current_user.get("_id"))
+        health_data.user_id = user_id
+        if symptoms:
+            symptoms.user_id = user_id
         logger.info(f"Comprehensive analysis for user: {health_data.user_id}")
         
         result = enhanced_ml_service.get_comprehensive_analysis(health_data, symptoms)
@@ -433,7 +552,10 @@ async def get_comprehensive_analysis(
 
 
 @router.post("/enhanced-predict", response_model=PredictionResponse)
-async def enhanced_predict(data: HealthDataInput):
+async def enhanced_predict(
+    data: HealthDataInput,
+    current_user: dict = Depends(get_current_user)
+):
     """
     Enhanced migraine risk prediction using improved model.
     
@@ -447,6 +569,7 @@ async def enhanced_predict(data: HealthDataInput):
         PredictionResponse with enhanced risk assessment
     """
     try:
+        data.user_id = str(current_user.get("_id"))
         logger.info(f"Enhanced prediction for user: {data.user_id}")
         
         prediction = enhanced_ml_service.predict_risk(data)
@@ -529,7 +652,10 @@ def _get_trigger_summary(triggers: list) -> str:
 # ========================
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat_with_assistant(request: ChatRequest):
+async def chat_with_assistant(
+    request: ChatRequest,
+    current_user: dict = Depends(get_current_user)
+):
     """
     Interactive chatbot for migraine-related questions.
     
@@ -546,6 +672,7 @@ async def chat_with_assistant(request: ChatRequest):
         ChatResponse with AI reply and suggestions
     """
     try:
+        request.user_id = str(current_user.get("_id"))
         logger.info(f"Chat request from user: {request.user_id}")
         
         response = await groq_service.chat(request)
@@ -598,23 +725,12 @@ async def get_migraine_types():
 # PDF REPORT GENERATION ENDPOINTS
 # ========================
 
-from pydantic import BaseModel
-
-class DailyReportRequest(BaseModel):
-    """Request model for daily report generation."""
-    health_data: HealthDataInput
-    prediction: dict
-    ai_suggestions: Optional[List[str]] = None
-    user_name: Optional[str] = "User"
-
-class WeeklyReportRequest(BaseModel):
-    """Request model for weekly report generation."""
-    weekly_data: List[dict]
-    user_name: Optional[str] = "User"
-
 
 @router.post("/generate-daily-report")
-async def generate_daily_report(request: DailyReportRequest):
+async def generate_daily_report(
+    request: DailyReportRequest,
+    current_user: dict = Depends(get_current_user)
+):
     """
     Generate a daily PDF report with prediction and health data.
     
@@ -625,7 +741,11 @@ async def generate_daily_report(request: DailyReportRequest):
         PDF file as downloadable response
     """
     try:
-        logger.info(f"Generating daily report for user: {request.user_name}")
+        user_id = str(current_user.get("_id"))
+        request.health_data.user_id = user_id
+        patient_info = request.patient_info.model_dump() if request.patient_info else _patient_from_user(current_user)
+        report_user_name = patient_info.get("full_name") or request.user_name or "User"
+        logger.info(f"Generating daily report for user: {report_user_name}")
         
         # Convert health_data to dict
         health_dict = {
@@ -642,7 +762,8 @@ async def generate_daily_report(request: DailyReportRequest):
             prediction_data=request.prediction,
             health_data=health_dict,
             ai_suggestions=request.ai_suggestions,
-            user_name=request.user_name
+            user_name=report_user_name,
+            patient_info=patient_info,
         )
         
         # Return as downloadable PDF
@@ -666,7 +787,10 @@ async def generate_daily_report(request: DailyReportRequest):
 
 
 @router.post("/generate-weekly-report")
-async def generate_weekly_report(request: WeeklyReportRequest):
+async def generate_weekly_report(
+    request: WeeklyReportRequest,
+    current_user: dict = Depends(get_current_user)
+):
     """
     Generate a weekly PDF report with trend analysis.
     
@@ -677,12 +801,52 @@ async def generate_weekly_report(request: WeeklyReportRequest):
         PDF file as downloadable response
     """
     try:
-        logger.info(f"Generating weekly report for user: {request.user_name}")
+        user_id = str(current_user.get("_id"))
+        patient_info = request.patient_info.model_dump() if request.patient_info else _patient_from_user(current_user)
+        report_user_name = patient_info.get("full_name") or request.user_name or "User"
+        logger.info(f"Generating weekly report for user: {report_user_name}")
+
+        weekly_history = await db_service.get_user_history(user_id=user_id, days=7, limit=200)
+        full_history = await db_service.get_user_history(user_id=user_id, days=90, limit=500)
+
+        weekly_data = []
+        for record in reversed(weekly_history.records):
+            prediction = record.prediction or {}
+            weekly_data.append({
+                "date": record.created_at.strftime("%Y-%m-%d"),
+                "risk_level": prediction.get("risk_level", "N/A"),
+                "probability": prediction.get("probability", 0),
+                "triggers": prediction.get("triggers", []),
+                "health_data": {
+                    "stress_level": record.stress_level,
+                    "sleep_hours": record.sleep_hours,
+                    "heart_rate": record.heart_rate,
+                    "activity_level": record.activity_level,
+                    "weather_pressure": record.weather_pressure,
+                    "aqi": record.aqi,
+                },
+            })
+
+        if not weekly_data and request.weekly_data:
+            weekly_data = request.weekly_data
+
+        top_trigger = "None detected"
+        if full_history.trigger_frequency:
+            top_trigger = max(full_history.trigger_frequency, key=full_history.trigger_frequency.get)
+
+        history_summary = {
+            "total_records": full_history.total_records,
+            "migraine_count": full_history.migraine_count,
+            "average_risk": full_history.average_risk,
+            "top_trigger": top_trigger,
+        }
         
         # Generate PDF
         pdf_bytes = report_service.generate_weekly_report(
-            weekly_data=request.weekly_data,
-            user_name=request.user_name
+            weekly_data=weekly_data,
+            user_name=report_user_name,
+            patient_info=patient_info,
+            previous_history_summary=history_summary,
         )
         
         # Return as downloadable PDF
@@ -706,7 +870,10 @@ async def generate_weekly_report(request: WeeklyReportRequest):
 
 
 @router.post("/generate-quick-report")
-async def generate_quick_report(health_data: HealthDataInput):
+async def generate_quick_report(
+    health_data: HealthDataInput,
+    current_user: dict = Depends(get_current_user)
+):
     """
     Quick endpoint to generate daily report from just health data.
     
@@ -719,6 +886,8 @@ async def generate_quick_report(health_data: HealthDataInput):
         PDF file as downloadable response
     """
     try:
+        health_data.user_id = str(current_user.get("_id"))
+        patient_info = _patient_from_user(current_user)
         logger.info(f"Generating quick report for user: {health_data.user_id}")
         
         # Get prediction
@@ -752,7 +921,8 @@ async def generate_quick_report(health_data: HealthDataInput):
             },
             health_data=health_dict,
             ai_suggestions=ai_response.suggestions,
-            user_name=health_data.user_id
+            user_name=patient_info.get("full_name") or health_data.user_id,
+            patient_info=patient_info,
         )
         
         # Return as downloadable PDF

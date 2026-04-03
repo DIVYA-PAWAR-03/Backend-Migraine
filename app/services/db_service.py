@@ -6,6 +6,8 @@ user health data, predictions, and historical trends.
 """
 
 import logging
+import secrets
+import hashlib
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -22,12 +24,14 @@ class DatabaseService:
     """Service class for MongoDB database operations."""
     
     COLLECTION_NAME = "health_records"
+    USERS_COLLECTION_NAME = "users"
     
     def __init__(self):
         """Initialize database service."""
-        self.client: Optional[AsyncIOMotorClient] = None
+        self.client = None
         self.db = None
         self.collection = None
+        self.users_collection = None
     
     async def connect(self) -> bool:
         """
@@ -37,18 +41,13 @@ class DatabaseService:
             bool: True if connection successful, False otherwise
         """
         try:
-            # Keep serverless startup responsive even when DB is unreachable.
-            self.client = AsyncIOMotorClient(
-                settings.MONGODB_URL,
-                serverSelectionTimeoutMS=3000,
-                connectTimeoutMS=3000,
-                socketTimeoutMS=3000,
-            )
+            self.client = AsyncIOMotorClient(settings.MONGODB_URL)
             # Test connection
             await self.client.admin.command('ping')
             
             self.db = self.client[settings.DATABASE_NAME]
             self.collection = self.db[self.COLLECTION_NAME]
+            self.users_collection = self.db[self.USERS_COLLECTION_NAME]
             
             # Create indexes for better query performance
             await self._create_indexes()
@@ -69,6 +68,8 @@ class DatabaseService:
             await self.collection.create_index("user_id")
             await self.collection.create_index("created_at")
             await self.collection.create_index([("user_id", 1), ("created_at", -1)])
+            await self.users_collection.create_index("email", unique=True)
+            await self.users_collection.create_index("patient_id", unique=True)
             logger.info("Database indexes created successfully")
         except Exception as e:
             logger.warning(f"Error creating indexes: {e}")
@@ -82,6 +83,81 @@ class DatabaseService:
     def is_connected(self) -> bool:
         """Check if database is connected."""
         return self.client is not None and self.collection is not None
+
+    @staticmethod
+    def _hash_password(password: str, salt: str) -> str:
+        return hashlib.sha256(f"{salt}:{password}".encode("utf-8")).hexdigest()
+
+    async def register_user(
+        self,
+        full_name: str,
+        email: str,
+        password: str,
+        age: Optional[int] = None,
+        gender: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Register a new user account."""
+        if not self.is_connected() or self.users_collection is None:
+            return None
+
+        email = email.strip().lower()
+        existing = await self.users_collection.find_one({"email": email})
+        if existing:
+            return None
+
+        salt = secrets.token_hex(16)
+        patient_id = f"PT-{secrets.token_hex(4).upper()}"
+        user = {
+            "full_name": full_name.strip(),
+            "email": email,
+            "patient_id": patient_id,
+            "age": age,
+            "gender": gender,
+            "password_salt": salt,
+            "password_hash": self._hash_password(password, salt),
+            "created_at": datetime.utcnow(),
+        }
+        result = await self.users_collection.insert_one(user)
+        user["_id"] = result.inserted_id
+        return user
+
+    async def authenticate_user(self, email: str, password: str) -> Optional[Dict[str, Any]]:
+        """Validate user credentials and return user document when valid."""
+        if not self.is_connected() or self.users_collection is None:
+            return None
+
+        email = email.strip().lower()
+        user = await self.users_collection.find_one({"email": email})
+        if not user:
+            return None
+
+        expected = self._hash_password(password, user.get("password_salt", ""))
+        if expected != user.get("password_hash"):
+            return None
+        return user
+
+    async def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch user by id string."""
+        if not self.is_connected() or self.users_collection is None:
+            return None
+
+        try:
+            return await self.users_collection.find_one({"_id": ObjectId(user_id)})
+        except Exception:
+            return None
+
+    @staticmethod
+    def serialize_user_profile(user: Dict[str, Any]) -> Dict[str, Any]:
+        """Return safe user profile payload."""
+        return {
+            "id": str(user.get("_id")),
+            "full_name": user.get("full_name", "Patient"),
+            "email": user.get("email"),
+            "patient_id": user.get("patient_id"),
+            "age": user.get("age"),
+            "gender": user.get("gender"),
+            "created_at": user.get("created_at"),
+        }
     
     async def save_health_data(
         self, 
@@ -285,7 +361,8 @@ class DatabaseService:
     async def update_migraine_status(
         self, 
         record_id: str, 
-        had_migraine: bool
+        had_migraine: bool,
+        user_id: str,
     ) -> bool:
         """
         Update migraine status for a record.
@@ -293,6 +370,7 @@ class DatabaseService:
         Args:
             record_id: Record ID to update
             had_migraine: Whether migraine occurred
+            user_id: User identifier to enforce record ownership
             
         Returns:
             bool: True if update successful
@@ -302,7 +380,7 @@ class DatabaseService:
         
         try:
             result = await self.collection.update_one(
-                {"_id": ObjectId(record_id)},
+                {"_id": ObjectId(record_id), "user_id": user_id},
                 {"$set": {"had_migraine": had_migraine}}
             )
             return result.modified_count > 0
