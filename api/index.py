@@ -15,18 +15,4 @@ if os.path.isdir(BACKEND_DIR) and BACKEND_DIR not in sys.path:
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
-try:
-    from app.main import app
-except Exception as exc:
-    from fastapi import FastAPI
-
-    app = FastAPI(title="Migraine Backend Boot Error")
-    _error = str(exc)
-
-    @app.get("/")
-    async def boot_error_root():
-        return {"status": "boot_error", "error": _error}
-
-    @app.get("/api/v1/health")
-    async def boot_error_health():
-        return {"status": "boot_error", "error": _error}
+from app.main import app
