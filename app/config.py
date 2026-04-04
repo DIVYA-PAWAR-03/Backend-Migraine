@@ -3,6 +3,9 @@ Configuration settings for the Migraine Trigger Tracker application.
 Uses pydantic-settings for environment variable management.
 """
 
+import json
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -32,6 +35,25 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://127.0.0.1:3000"
     ]
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, value):
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    pass
+            return [item.strip() for item in raw.split(",") if item.strip()]
+        return value
 
     # Auth Settings
     AUTH_SECRET: str = "change-this-in-production"
