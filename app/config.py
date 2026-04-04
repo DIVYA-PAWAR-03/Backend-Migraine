@@ -5,7 +5,6 @@ Uses pydantic-settings for environment variable management.
 
 import json
 
-from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -31,29 +30,21 @@ class Settings(BaseSettings):
     SCALER_PATH: str = "app/ml/scaler.pkl"
     
     # CORS Settings
-    CORS_ORIGINS: list[str] = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000"
-    ]
+    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
 
-    @field_validator("CORS_ORIGINS", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, value):
-        if isinstance(value, list):
-            return value
-        if isinstance(value, str):
-            raw = value.strip()
-            if not raw:
-                return []
-            if raw.startswith("["):
-                try:
-                    parsed = json.loads(raw)
-                    if isinstance(parsed, list):
-                        return [str(item).strip() for item in parsed if str(item).strip()]
-                except Exception:
-                    pass
-            return [item.strip() for item in raw.split(",") if item.strip()]
-        return value
+    @property
+    def cors_origins_list(self) -> list[str]:
+        raw = (self.CORS_ORIGINS or "").strip()
+        if not raw:
+            return []
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            except Exception:
+                pass
+        return [item.strip() for item in raw.split(",") if item.strip()]
 
     # Auth Settings
     AUTH_SECRET: str = "change-this-in-production"
