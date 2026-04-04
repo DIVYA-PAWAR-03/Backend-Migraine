@@ -38,8 +38,14 @@ from ..services.ml_service import ml_service
 from ..services.enhanced_ml_service import enhanced_ml_service
 from ..services.groq_service import groq_service
 from ..services.db_service import db_service
-from ..services.report_service import report_service
 from ..services.auth_service import auth_service
+
+report_service = None
+report_service_error = None
+try:
+    from ..services.report_service import report_service
+except Exception as exc:
+    report_service_error = str(exc)
 
 logger = logging.getLogger(__name__)
 
@@ -740,6 +746,9 @@ async def generate_daily_report(
     Returns:
         PDF file as downloadable response
     """
+    if report_service is None:
+        raise HTTPException(status_code=503, detail=f"Report service unavailable: {report_service_error}")
+
     try:
         user_id = str(current_user.get("_id"))
         request.health_data.user_id = user_id
@@ -800,6 +809,9 @@ async def generate_weekly_report(
     Returns:
         PDF file as downloadable response
     """
+    if report_service is None:
+        raise HTTPException(status_code=503, detail=f"Report service unavailable: {report_service_error}")
+
     try:
         user_id = str(current_user.get("_id"))
         patient_info = request.patient_info.model_dump() if request.patient_info else _patient_from_user(current_user)
@@ -885,6 +897,9 @@ async def generate_quick_report(
     Returns:
         PDF file as downloadable response
     """
+    if report_service is None:
+        raise HTTPException(status_code=503, detail=f"Report service unavailable: {report_service_error}")
+
     try:
         health_data.user_id = str(current_user.get("_id"))
         patient_info = _patient_from_user(current_user)
