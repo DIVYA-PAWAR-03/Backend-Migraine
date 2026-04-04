@@ -28,20 +28,14 @@ class Settings(BaseSettings):
     SCALER_PATH: str = "app/ml/scaler.pkl"
     
     # CORS Settings
-    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+    CORS_ORIGINS: list[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
+    ]
 
-    @property
-    def cors_origins_list(self) -> list[str]:
-        """Parse CORS_ORIGINS from comma-separated values or JSON-like list string."""
-        raw = (self.CORS_ORIGINS or "").strip()
-        if not raw:
-            return []
-
-        if raw.startswith("[") and raw.endswith("]"):
-            raw = raw[1:-1]
-
-        cleaned = raw.replace('"', "").replace("'", "")
-        return [item.strip() for item in cleaned.split(",") if item.strip()]
+    # Auth Settings
+    AUTH_SECRET: str = "change-this-in-production"
+    AUTH_TOKEN_EXPIRY_HOURS: int = 168
     
     class Config:
         env_file = ".env"

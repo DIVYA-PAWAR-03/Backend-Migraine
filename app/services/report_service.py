@@ -6,7 +6,7 @@ Generates daily and weekly migraine reports in PDF format.
 
 import io
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -113,7 +113,8 @@ class ReportService:
         prediction_data: Dict,
         health_data: Dict,
         ai_suggestions: List[str] = None,
-        user_name: str = "User"
+        user_name: str = "User",
+        patient_info: Optional[Dict[str, Any]] = None,
     ) -> bytes:
         """
         Generate a daily migraine risk report.
@@ -146,6 +147,18 @@ class ReportService:
             self.styles['ReportSubtitle']
         ))
         story.append(Paragraph(f"Patient: {user_name}", self.styles['Normal']))
+        story.append(Paragraph(
+            f"Patient ID: {(patient_info or {}).get('patient_id', 'N/A')}",
+            self.styles['Normal']
+        ))
+        story.append(Paragraph(
+            f"Email: {(patient_info or {}).get('email', 'N/A')}",
+            self.styles['Normal']
+        ))
+        story.append(Paragraph(
+            f"Age/Gender: {(patient_info or {}).get('age', 'N/A')} / {(patient_info or {}).get('gender', 'N/A')}",
+            self.styles['Normal']
+        ))
         story.append(Spacer(1, 20))
         
         # Divider
@@ -244,7 +257,9 @@ class ReportService:
         self,
         weekly_data: List[Dict],
         summary_stats: Dict = None,
-        user_name: str = "User"
+        user_name: str = "User",
+        patient_info: Optional[Dict[str, Any]] = None,
+        previous_history_summary: Optional[Dict[str, Any]] = None,
     ) -> bytes:
         """
         Generate a weekly migraine analysis report.
@@ -279,6 +294,18 @@ class ReportService:
             self.styles['ReportSubtitle']
         ))
         story.append(Paragraph(f"Patient: {user_name}", self.styles['Normal']))
+        story.append(Paragraph(
+            f"Patient ID: {(patient_info or {}).get('patient_id', 'N/A')}",
+            self.styles['Normal']
+        ))
+        story.append(Paragraph(
+            f"Email: {(patient_info or {}).get('email', 'N/A')}",
+            self.styles['Normal']
+        ))
+        story.append(Paragraph(
+            f"Age/Gender: {(patient_info or {}).get('age', 'N/A')} / {(patient_info or {}).get('gender', 'N/A')}",
+            self.styles['Normal']
+        ))
         story.append(Spacer(1, 20))
         
         # Divider
@@ -336,6 +363,29 @@ class ReportService:
         ]))
         story.append(summary_table)
         story.append(Spacer(1, 30))
+
+        if previous_history_summary:
+            story.append(Paragraph("🧠 Historical Memory (Last 90 Days)", self.styles['SectionHeader']))
+            memory_data = [
+                ['Metric', 'Value'],
+                ['Total Logs', str(previous_history_summary.get('total_records', 0))],
+                ['Confirmed Migraine Days', str(previous_history_summary.get('migraine_count', 0))],
+                ['Average Risk', f"{previous_history_summary.get('average_risk', 0) * 100:.1f}%"],
+                ['Top Trigger', previous_history_summary.get('top_trigger', 'None detected')],
+            ]
+
+            memory_table = Table(memory_data, colWidths=[2.5*inch, 2.5*inch])
+            memory_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0f766e')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#ecfeff')),
+                ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#99f6e4')),
+                ('PADDING', (0, 0), (-1, -1), 8),
+            ]))
+            story.append(memory_table)
+            story.append(Spacer(1, 30))
         
         # Daily Breakdown
         story.append(Paragraph("📅 Daily Breakdown", self.styles['SectionHeader']))
