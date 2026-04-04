@@ -14,8 +14,15 @@ from contextlib import asynccontextmanager
 import logging
 
 from .config import settings
-from .routes.api import router
 from .services.db_service import db_service
+
+router = None
+startup_error = None
+
+try:
+    from .routes.api import router
+except Exception as e:
+    startup_error = str(e)
 
 # Configure logging
 logging.basicConfig(
@@ -99,7 +106,10 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(router)
+if router is not None:
+    app.include_router(router)
+else:
+    logger.error(f"API router failed to load: {startup_error}")
 
 
 # Root endpoint
@@ -109,9 +119,22 @@ async def root():
     return {
         "name": settings.APP_NAME,
         "version": settings.APP_VERSION,
-        "status": "running",
+        "status": "running" if startup_error is None else "degraded",
         "docs": "/docs",
-        "health": "/api/v1/health"
+        "health": "/api/v1/health",
+        "startup_error": startup_error
+    }
+
+
+@app.get("/api/v1/health")
+async def app_health():
+    """Global health endpoint that remains available even when router load fails."""
+    return {
+        "status": "healthy" if startup_error is None else "degraded",
+        "service": settings.APP_NAME,
+        "router_loaded": router is not None,
+        "database_connected": db_service.is_connected(),
+        "startup_error": startup_error,
     }
 
 
