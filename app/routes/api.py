@@ -127,9 +127,6 @@ async def get_current_user(
 async def register_user(request: RegisterRequest):
     """Register a new user and return an access token."""
     try:
-        if not db_service.is_connected():
-            raise HTTPException(status_code=503, detail="Registration unavailable: database not connected")
-
         user = await db_service.register_user(
             full_name=request.full_name,
             email=request.email,
@@ -156,9 +153,6 @@ async def register_user(request: RegisterRequest):
 async def login_user(request: LoginRequest):
     """Authenticate user and return token."""
     try:
-        if not db_service.is_connected():
-            raise HTTPException(status_code=503, detail="Login unavailable: database not connected")
-
         user = await db_service.authenticate_user(request.email, request.password)
         if not user:
             raise HTTPException(status_code=401, detail="Invalid email or password")

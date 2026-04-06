@@ -32,6 +32,8 @@ class DatabaseService:
         self.db = None
         self.collection = None
         self.users_collection = None
+        self._memory_users_by_email: Dict[str, Dict[str, Any]] = {}
+        self._memory_users_by_id: Dict[str, Dict[str, Any]] = {}
     
     async def connect(self) -> bool:
         """
@@ -97,11 +99,12 @@ class DatabaseService:
         gender: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Register a new user account."""
-        if not self.is_connected() or self.users_collection is None:
-            return None
-
         email = email.strip().lower()
-        existing = await self.users_collection.find_one({"email": email})
+        existing = None
+        if self.is_connected() and self.users_collection is not None:
+            existing = await self.users_collection.find_one({"email": email})
+        else:
+            existing = self._memory_users_by_email.get(email)
         if existing:
             return None
 
@@ -117,17 +120,24 @@ class DatabaseService:
             "password_hash": self._hash_password(password, salt),
             "created_at": datetime.utcnow(),
         }
-        result = await self.users_collection.insert_one(user)
-        user["_id"] = result.inserted_id
+        if self.is_connected() and self.users_collection is not None:
+            result = await self.users_collection.insert_one(user)
+            user["_id"] = result.inserted_id
+        else:
+            # Fallback mode for serverless/runtime environments without MongoDB.
+            user["_id"] = f"mem-{secrets.token_hex(12)}"
+            self._memory_users_by_email[email] = user
+            self._memory_users_by_id[str(user["_id"])] = user
         return user
 
     async def authenticate_user(self, email: str, password: str) -> Optional[Dict[str, Any]]:
         """Validate user credentials and return user document when valid."""
-        if not self.is_connected() or self.users_collection is None:
-            return None
-
         email = email.strip().lower()
-        user = await self.users_collection.find_one({"email": email})
+        user = None
+        if self.is_connected() and self.users_collection is not None:
+            user = await self.users_collection.find_one({"email": email})
+        else:
+            user = self._memory_users_by_email.get(email)
         if not user:
             return None
 
@@ -138,13 +148,13 @@ class DatabaseService:
 
     async def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Fetch user by id string."""
-        if not self.is_connected() or self.users_collection is None:
-            return None
+        if self.is_connected() and self.users_collection is not None:
+            try:
+                return await self.users_collection.find_one({"_id": ObjectId(user_id)})
+            except Exception:
+                return None
 
-        try:
-            return await self.users_collection.find_one({"_id": ObjectId(user_id)})
-        except Exception:
-            return None
+        return self._memory_users_by_id.get(str(user_id))
 
     @staticmethod
     def serialize_user_profile(user: Dict[str, Any]) -> Dict[str, Any]:
