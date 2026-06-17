@@ -16,7 +16,7 @@ Endpoints:
 
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import Response
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pydantic import BaseModel, EmailStr, Field
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import logging
@@ -57,8 +57,8 @@ class RegisterRequest(BaseModel):
     full_name: str = Field(..., min_length=2, max_length=100)
     email: EmailStr
     password: str = Field(..., min_length=6, max_length=128)
-    age: Optional[int] = Field(default=None, ge=1, le=120)
-    gender: Optional[str] = Field(default=None, max_length=30)
+    age: int = Field(..., ge=1, le=120)
+    gender: Literal["Male", "Female", "Other"]
 
 
 class LoginRequest(BaseModel):
