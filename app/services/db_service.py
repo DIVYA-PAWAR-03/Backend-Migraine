@@ -95,8 +95,8 @@ class DatabaseService:
         full_name: str,
         email: str,
         password: str,
-        age: Optional[int] = None,
-        gender: Optional[str] = None,
+        age: int,
+        gender: str,
     ) -> Optional[Dict[str, Any]]:
         """Register a new user account."""
         email = email.strip().lower()
