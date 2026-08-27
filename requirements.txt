@@ -18,6 +18,7 @@ motor==3.3.2
 
 # Groq LLM
 groq==0.4.2
+httpx<0.28.0
 
 # Utilities
 python-dotenv==1.0.0
