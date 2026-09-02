@@ -14,7 +14,7 @@ Endpoints:
 - POST /generate-weekly-report - Generate weekly PDF report
 """
 
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File
 from fastapi.responses import Response
 from typing import Optional, List, Literal
 from pydantic import BaseModel, EmailStr, Field
@@ -32,7 +32,8 @@ from ..models.schemas import (
     SymptomClassificationResponse,
     ComprehensiveAnalysisResponse,
     ChatRequest,
-    ChatResponse
+    ChatResponse,
+    ReportAnalysisResponse
 )
 from ..services.ml_service import ml_service
 from ..services.enhanced_ml_service import enhanced_ml_service
@@ -121,6 +122,19 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="User not found")
 
     return user
+
+
+async def get_optional_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    if not credentials or not credentials.credentials:
+        return {"_id": "guest_user", "full_name": "Guest User"}
+    payload = auth_service.verify_access_token(credentials.credentials)
+    if not payload:
+        return {"_id": "guest_user", "full_name": "Guest User"}
+    user = await db_service.get_user_by_id(payload.get("user_id", ""))
+    return user or {"_id": "guest_user", "full_name": "Guest User"}
+
 
 
 @router.post("/register", response_model=AuthResponse)
@@ -958,3 +972,74 @@ async def generate_quick_report(
             status_code=500,
             detail=f"Error generating report: {str(e)}"
         )
+
+
+# ========================
+# REPORT UPLOAD & ANALYSIS ENDPOINT
+# ========================
+
+@router.post("/analyze-report", response_model=ReportAnalysisResponse)
+async def analyze_uploaded_report(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_optional_current_user)
+):
+    """
+    Upload and analyze a medical report (PDF, TXT, CSV, JSON, MD, or Image).
+    Extracts report content and uses Groq AI to evaluate key clinical findings,
+    migraine triggers, risk level, and recommendations.
+    """
+    if not file:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+
+    filename = file.filename or "uploaded_report"
+    ext = filename.split(".")[-1].lower() if "." in filename else ""
+    
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    extracted_text = ""
+    file_type_label = ext.upper() if ext else "UNKNOWN"
+
+    try:
+        if ext == "pdf":
+            file_type_label = "PDF Document"
+            import io
+            import pypdf
+            pdf_reader = pypdf.PdfReader(io.BytesIO(contents))
+            text_pages = []
+            for i, page in enumerate(pdf_reader.pages):
+                page_text = page.extract_text()
+                if page_text:
+                    text_pages.append(page_text)
+            extracted_text = "\n".join(text_pages).strip()
+        else:
+            file_type_label = f"{ext.upper()} Document" if ext else "Text Document"
+            try:
+                extracted_text = contents.decode("utf-8", errors="ignore").strip()
+            except Exception:
+                extracted_text = ""
+    except Exception as e:
+        logger.error(f"Error parsing uploaded file {filename}: {e}")
+        raise HTTPException(status_code=400, detail=f"Could not extract text from file: {str(e)}")
+
+    if not extracted_text or len(extracted_text) < 5:
+        extracted_text = f"Report File: {filename}\nFile Size: {len(contents)} bytes\nNote: Visual report or medical document uploaded."
+
+    logger.info(f"Analyzing report '{filename}' ({file_type_label}) for user: {current_user.get('_id')}")
+    
+    analysis_detail = await groq_service.analyze_medical_report(
+        report_text=extracted_text,
+        filename=filename
+    )
+
+    preview = extracted_text[:300] + "..." if len(extracted_text) > 300 else extracted_text
+
+    return ReportAnalysisResponse(
+        success=True,
+        filename=filename,
+        file_type=file_type_label,
+        extracted_text_preview=preview,
+        analysis=analysis_detail
+    )
+

@@ -11,7 +11,7 @@ from groq import Groq
 from datetime import datetime
 
 from ..config import settings
-from ..models.schemas import AISuggestionRequest, AISuggestionResponse, RiskLevel
+from ..models.schemas import AISuggestionRequest, AISuggestionResponse, RiskLevel, ReportAnalysisDetail
 
 logger = logging.getLogger(__name__)
 
@@ -441,6 +441,152 @@ What would you like to know more about?"""
         
         return related
 
+    async def analyze_medical_report(self, report_text: str, filename: str) -> ReportAnalysisDetail:
+        """
+        Analyze uploaded medical/health report text using Groq LLM.
+        """
+        if not self.is_available():
+            return self._get_fallback_report_analysis(report_text, filename)
+
+        system_prompt = """You are a clinical health AI specialist analyzing medical, lab, and health reports for migraine sufferers.
+Analyze the report text and provide structured insights.
+
+Format your output strictly as follows:
+SUMMARY: <1-2 sentences summarizing overall report findings>
+RISK_LEVEL: <Low, Medium, or High>
+FINDINGS:
+- <Key medical or lab finding 1>
+- <Key medical or lab finding 2>
+TRIGGERS:
+- <Identified migraine trigger or risk factor 1>
+- <Identified migraine trigger or risk factor 2>
+RECOMMENDATIONS:
+1. <Actionable prevention or health advice 1>
+2. <Actionable prevention or health advice 2>
+3. <When to consult a physician>
+"""
+
+        user_prompt = f"Uploaded File Name: {filename}\n\nREPORT TEXT CONTENT:\n{report_text[:4000]}"
+
+        try:
+            chat_completion = self.client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                model=settings.GROQ_MODEL,
+                temperature=0.4,
+                max_tokens=800,
+                top_p=0.9
+            )
+            response_text = chat_completion.choices[0].message.content
+            return self._parse_report_analysis_response(response_text, report_text)
+        except Exception as e:
+            logger.error(f"Error analyzing medical report with Groq: {e}")
+            return self._get_fallback_report_analysis(report_text, filename)
+
+    def _parse_report_analysis_response(self, response_text: str, report_text: str) -> ReportAnalysisDetail:
+        summary = ""
+        risk_level = RiskLevel.MEDIUM
+        key_findings = []
+        triggers = []
+        recommendations = []
+
+        current_section = None
+        for raw_line in response_text.strip().split("\n"):
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            upper_line = line.upper()
+            if upper_line.startswith("SUMMARY:"):
+                summary = line[8:].strip()
+                current_section = "SUMMARY"
+            elif upper_line.startswith("RISK_LEVEL:") or upper_line.startswith("RISK LEVEL:"):
+                raw_risk = line.split(":", 1)[1].strip()
+                if "HIGH" in raw_risk.upper():
+                    risk_level = RiskLevel.HIGH
+                elif "LOW" in raw_risk.upper():
+                    risk_level = RiskLevel.LOW
+                else:
+                    risk_level = RiskLevel.MEDIUM
+                current_section = "RISK_LEVEL"
+            elif upper_line.startswith("FINDINGS:"):
+                current_section = "FINDINGS"
+            elif upper_line.startswith("TRIGGERS:"):
+                current_section = "TRIGGERS"
+            elif upper_line.startswith("RECOMMENDATIONS:"):
+                current_section = "RECOMMENDATIONS"
+            else:
+                cleaned = line.lstrip("-*•123456789. ").strip()
+                if cleaned:
+                    if current_section == "FINDINGS":
+                        key_findings.append(cleaned)
+                    elif current_section == "TRIGGERS":
+                        triggers.append(cleaned)
+                    elif current_section == "RECOMMENDATIONS":
+                        recommendations.append(cleaned)
+                    elif current_section == "SUMMARY" and not summary:
+                        summary = line
+
+        if not summary:
+            summary = "Analyzed report content for health indicators and potential migraine triggers."
+        if not key_findings:
+            key_findings = ["Report uploaded and parsed successfully."]
+        if not triggers:
+            triggers = ["No acute migraine triggers specifically highlighted in text."]
+        if not recommendations:
+            recommendations = [
+                "Maintain regular hydration and sleep patterns.",
+                "Share this report with your physician during your next checkup."
+            ]
+
+        return ReportAnalysisDetail(
+            summary=summary,
+            risk_level=risk_level,
+            key_findings=key_findings,
+            migraine_triggers=triggers,
+            recommendations=recommendations
+        )
+
+    def _get_fallback_report_analysis(self, report_text: str, filename: str) -> ReportAnalysisDetail:
+        text_lower = report_text.lower()
+        findings = []
+        triggers = []
+        risk_level = RiskLevel.LOW
+
+        if any(w in text_lower for w in ["stress", "anxiety", "cortisol"]):
+            triggers.append("Elevated stress or hormonal stress indicators detected in report.")
+            risk_level = RiskLevel.MEDIUM
+        if any(w in text_lower for w in ["sleep", "insomnia", "apnea", "fatigue"]):
+            triggers.append("Sleep disturbance or fatigue patterns noted.")
+            risk_level = RiskLevel.MEDIUM
+        if any(w in text_lower for w in ["pressure", "hypertension", "bp"]):
+            findings.append("Blood pressure or cardiovascular parameters mentioned.")
+        if any(w in text_lower for w in ["vitamin", "deficiency", "iron", "ferritin", "b12"]):
+            findings.append("Nutritional / Vitamin level indicators present in report.")
+            triggers.append("Potential nutritional sensitivity or deficiency.")
+
+        if not findings:
+            findings.append(f"Successfully processed report document '{filename}'.")
+        if not triggers:
+            triggers.append("Standard health record - monitor daily routines and hydration.")
+
+        recommendations = [
+            "Keep maintaining your daily migraine tracker diary alongside your lab reports.",
+            "Discuss any abnormal parameters or persistent symptoms with your medical provider.",
+            "Ensure proper hydration and consistent rest schedules."
+        ]
+
+        return ReportAnalysisDetail(
+            summary=f"Report '{filename}' processed. Key medical parameters reviewed for migraine trigger risk.",
+            risk_level=risk_level,
+            key_findings=findings,
+            migraine_triggers=triggers,
+            recommendations=recommendations
+        )
+
 
 # Singleton instance
 groq_service = GroqService()
+
